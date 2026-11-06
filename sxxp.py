@@ -66,7 +66,6 @@ SKIP_CLEAN_TICKERS = [
     'MT',
 ]
 
-
 def add_ticker_suffix(ticker: str, country: str) -> str:
     """
     Append the correct exchange suffix to a ticker based on the country.
@@ -76,19 +75,15 @@ def add_ticker_suffix(ticker: str, country: str) -> str:
       BA.     + UK        → BA.L
       III     + UK        → III.L
       ASML.AS + Netherlands → ASML.AS   (already has suffix, kept as-is)
+      MT      + France    → MT          (in SKIP_CLEAN_TICKERS, untouched)
     """
     if not isinstance(ticker, str) or not ticker.strip():
         return ticker
 
     base = ticker.strip()
 
-    # ── 0. Skip cleaning for tickers in the whitelist ─────────────────
+    # ── 0. Return as-is for tickers in the whitelist ──────────────────
     if base in SKIP_CLEAN_TICKERS:
-        # Still append country suffix if not already present
-        if not re.search(r'\.[A-Z]{1,3}$', base):
-            suffix = COUNTRY_SUFFIX.get(country)
-            if suffix:
-                return base + suffix
         return base
 
     # ── 1. 先判断是否已有合法后缀（字母后缀）────────────────────────
@@ -108,7 +103,6 @@ def add_ticker_suffix(ticker: str, country: str) -> str:
         return cleaned + suffix
 
     return cleaned  # 未知国家，返回清理后的 ticker
-
 
 def create_constituents(df):
     """Create a DataFrame with the current constituents as a comma-separated string."""
