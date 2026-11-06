@@ -29,7 +29,6 @@ COUNTRY_SUFFIX = {
     'Poland':          '.WA',
     'Luxembourg':      '.LU',
     'Greece':          '.AT',
-
 }
 
 
@@ -60,6 +59,14 @@ def clean_ticker_base(ticker: str) -> str:
     return base
 
 
+# Tickers in this list will NOT be cleaned (no space→'-', no trailing-dot removal).
+# They will only get the country-specific suffix appended.
+# Add any ticker here that should be left exactly as it appears on Wikipedia.
+SKIP_CLEAN_TICKERS = [
+    'MT',
+]
+
+
 def add_ticker_suffix(ticker: str, country: str) -> str:
     """
     Append the correct exchange suffix to a ticker based on the country.
@@ -73,9 +80,18 @@ def add_ticker_suffix(ticker: str, country: str) -> str:
     if not isinstance(ticker, str) or not ticker.strip():
         return ticker
 
-    # ── 1. 先判断是否已有合法后缀（字母后缀）────────────────────────
     base = ticker.strip()
 
+    # ── 0. Skip cleaning for tickers in the whitelist ─────────────────
+    if base in SKIP_CLEAN_TICKERS:
+        # Still append country suffix if not already present
+        if not re.search(r'\.[A-Z]{1,3}$', base):
+            suffix = COUNTRY_SUFFIX.get(country)
+            if suffix:
+                return base + suffix
+        return base
+
+    # ── 1. 先判断是否已有合法后缀（字母后缀）────────────────────────
     # 已有后缀：BA.L / ASML.AS 等
     if re.search(r'\.[A-Z]{1,3}$', base):
         # 只做清理：合并重复句点、去尾点、去空格
