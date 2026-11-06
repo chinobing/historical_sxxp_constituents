@@ -28,6 +28,8 @@ COUNTRY_SUFFIX = {
     'Portugal':        '.LS',
     'Poland':          '.WA',
     'Luxembourg':      '.LU',
+    'Greece':          '.AT',
+
 }
 
 
