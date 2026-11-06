@@ -38,6 +38,7 @@ def clean_ticker_base(ticker: str) -> str:
     Handles several common issues found on Wikipedia tables:
       - Spaces in the symbol         → replace with '-'  (ATCO A → ATCO-A)
       - Trailing dot (no suffix)     → remove            (BA.     → BA)
+      - Middle dot (class indicator) → replace with '-'  (BT.A    → BT-A)
       - Multiple dots in the middle  → collapse to one   (BA..     → BA.)
     Returns only the cleaned base (no country suffix attached yet).
     """
@@ -49,22 +50,39 @@ def clean_ticker_base(ticker: str) -> str:
     # 1. 去掉末尾多余的句点（如 "BA." → "BA"）
     base = base.rstrip('.')
 
-    # 2. 把连续多个句点合并为一个（如 "BA.." → "BA."，配合上一步等于 "BA"）
-    #    更一般地："A..B" → "A.B"
+    # 2. 把连续多个句点合并为一个（如 "BA.." → "BA."）
     base = re.sub(r'\.{2,}', '.', base)
 
-    # 3. 把空格/制表符等空白替换为连字符（ATCO A → ATCO-A）
+    # 3. 把剩余的单个 "."（通常是 class indicator，如 BT.A）转为 "-"
+    #    例如: BT.A → BT-A,  SOME.CO → SOME-CO
+    base = base.replace('.', '-')
+
+    # 4. 把空格/制表符等空白替换为连字符（ATCO A → ATCO-A）
     base = re.sub(r'\s+', '-', base)
 
     return base
 
 
-# Tickers in this list will NOT be cleaned (no space→'-', no trailing-dot removal).
-# They will only get the country-specific suffix appended.
-# Add any ticker here that should be left exactly as it appears on Wikipedia.
+# Tickers in this list will be returned EXACTLY as they appear on Wikipedia:
+# no cleaning, no suffix appended.
+# Add any ticker here that should be left completely untouched.
 SKIP_CLEAN_TICKERS = [
-    'MT',
+    'MT',   # ← MT is listed as-is, not MT.PA
+    # 'EXAMPLE',   # ← add more tickers here
 ]
+
+
+# All valid exchange suffixes that may already appear on a Wikipedia ticker.
+# If the trailing suffix is one of these, it is treated as an existing exchange
+# code and kept as-is (no further suffix appended).
+# If the trailing ".<letters>" is NOT in this set, it is treated as part of the
+# ticker itself (e.g. a share-class indicator like BT.A) and will be cleaned.
+VALID_EXCHANGE_SUFFIXES = set(COUNTRY_SUFFIX.values()) | {
+    '.AX',   # Australia
+    '.TO',   # Toronto
+    '.US',   # US OTC / generic
+}
+
 
 def add_ticker_suffix(ticker: str, country: str) -> str:
     """
@@ -73,8 +91,9 @@ def add_ticker_suffix(ticker: str, country: str) -> str:
     Examples:
       ATCO A  + Sweden   → ATCO-A.ST
       BA.     + UK        → BA.L
+      BT.A    + UK        → BT-A.L      (middle dot is a class indicator, not a suffix)
       III     + UK        → III.L
-      ASML.AS + Netherlands → ASML.AS   (already has suffix, kept as-is)
+      ASML.AS + Netherlands → ASML.AS   (.AS is a known exchange suffix, kept as-is)
       MT      + France    → MT          (in SKIP_CLEAN_TICKERS, untouched)
     """
     if not isinstance(ticker, str) or not ticker.strip():
@@ -86,23 +105,26 @@ def add_ticker_suffix(ticker: str, country: str) -> str:
     if base in SKIP_CLEAN_TICKERS:
         return base
 
-    # ── 1. 先判断是否已有合法后缀（字母后缀）────────────────────────
-    # 已有后缀：BA.L / ASML.AS 等
-    if re.search(r'\.[A-Z]{1,3}$', base):
-        # 只做清理：合并重复句点、去尾点、去空格
-        # 拆成 base + 已有后缀，只清理 base 部分
-        b, _, sfx = base.rpartition('.')
-        if re.match(r'^[A-Z]{1,3}$', sfx):
+    # ── 1. Does it already end with a KNOWN exchange suffix? ──────────
+    #     e.g. ASML.AS → suffix is '.AS' (valid) → keep as-is
+    #     e.g. BT.A    → suffix is '.A'  (NOT valid) → treat as part of ticker
+    m = re.search(r'(\.[A-Z]{1,3})$', base)
+    if m:
+        trailing = m.group(1)
+        if trailing in VALID_EXCHANGE_SUFFIXES:
+            # Already has a known exchange suffix → clean the base, keep suffix
+            b = base[: -len(trailing)]
             cleaned_base = clean_ticker_base(b)
-            return f"{cleaned_base}.{sfx}"
+            return f"{cleaned_base}{trailing}"
 
-    # ── 2. 没有后缀，先清理 base，再追加国家后缀 ─────────────────────
+    # ── 2. No recognised suffix → clean everything, then append country suffix
     cleaned = clean_ticker_base(base)
     suffix = COUNTRY_SUFFIX.get(country)
     if suffix:
         return cleaned + suffix
 
-    return cleaned  # 未知国家，返回清理后的 ticker
+    return cleaned  # unknown country, return cleaned ticker as-is
+
 
 def create_constituents(df):
     """Create a DataFrame with the current constituents as a comma-separated string."""
