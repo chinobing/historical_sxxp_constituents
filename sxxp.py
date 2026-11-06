@@ -9,7 +9,7 @@ import re
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 
-# ★ 国家 → 交易所后缀映射表
+# Mapping from country (as it appears on Wikipedia) to exchange suffix
 COUNTRY_SUFFIX = {
     'United Kingdom':  '.L',
     'Germany':         '.DE',
@@ -31,29 +31,72 @@ COUNTRY_SUFFIX = {
 }
 
 
-def add_ticker_suffix(ticker: str, country: str) -> str:
+def clean_ticker_base(ticker: str) -> str:
     """
-    根据国家给 ticker 添加对应的交易所后缀。
-    如果 ticker 已经有后缀（如 ASML.AS），则保持不变。
+    Clean the base part of a ticker symbol before adding a suffix.
+    Handles several common issues found on Wikipedia tables:
+      - Spaces in the symbol         → replace with '-'  (ATCO A → ATCO-A)
+      - Trailing dot (no suffix)     → remove            (BA.     → BA)
+      - Multiple dots in the middle  → collapse to one   (BA..     → BA.)
+    Returns only the cleaned base (no country suffix attached yet).
     """
     if not isinstance(ticker, str) or not ticker.strip():
         return ticker
 
-    ticker = ticker.strip()
+    base = ticker.strip()
 
-    # 已有后缀，直接返回
-    if re.search(r'\.[A-Z]{1,3}$', ticker):
+    # 1. 去掉末尾多余的句点（如 "BA." → "BA"）
+    base = base.rstrip('.')
+
+    # 2. 把连续多个句点合并为一个（如 "BA.." → "BA."，配合上一步等于 "BA"）
+    #    更一般地："A..B" → "A.B"
+    base = re.sub(r'\.{2,}', '.', base)
+
+    # 3. 把空格/制表符等空白替换为连字符（ATCO A → ATCO-A）
+    base = re.sub(r'\s+', '-', base)
+
+    return base
+
+
+def add_ticker_suffix(ticker: str, country: str) -> str:
+    """
+    Append the correct exchange suffix to a ticker based on the country.
+    First cleans the base symbol, then adds the country-specific suffix.
+    Examples:
+      ATCO A  + Sweden   → ATCO-A.ST
+      BA.     + UK        → BA.L
+      III     + UK        → III.L
+      ASML.AS + Netherlands → ASML.AS   (already has suffix, kept as-is)
+    """
+    if not isinstance(ticker, str) or not ticker.strip():
         return ticker
 
+    # ── 1. 先判断是否已有合法后缀（字母后缀）────────────────────────
+    base = ticker.strip()
+
+    # 已有后缀：BA.L / ASML.AS 等
+    if re.search(r'\.[A-Z]{1,3}$', base):
+        # 只做清理：合并重复句点、去尾点、去空格
+        # 拆成 base + 已有后缀，只清理 base 部分
+        b, _, sfx = base.rpartition('.')
+        if re.match(r'^[A-Z]{1,3}$', sfx):
+            cleaned_base = clean_ticker_base(b)
+            return f"{cleaned_base}.{sfx}"
+
+    # ── 2. 没有后缀，先清理 base，再追加国家后缀 ─────────────────────
+    cleaned = clean_ticker_base(base)
     suffix = COUNTRY_SUFFIX.get(country)
     if suffix:
-        return ticker + suffix
-    return ticker  # 未知国家，原样返回
+        return cleaned + suffix
+
+    return cleaned  # 未知国家，返回清理后的 ticker
 
 
 def create_constituents(df):
+    """Create a DataFrame with the current constituents as a comma-separated string."""
     ticker_list = df['ticker'].tolist()
     res_string = ','.join(ticker_list)
+
     results_df = pd.DataFrame({
         'date': [date.today()],
         'tickers': [res_string],
@@ -62,6 +105,7 @@ def create_constituents(df):
 
 
 def diff_tickers(historical_df):
+    """Compare consecutive snapshots and return added/removed tickers."""
     added_tickers = {}
     removed_tickers = {}
 
@@ -84,6 +128,7 @@ def diff_tickers(historical_df):
     combined = pd.merge(at_only, rt_only, on=['date'], how='outer')
     combined = combined.sort_values('date', ascending=True)
     combined = combined.set_index('date')
+
     return combined
 
 
@@ -94,7 +139,7 @@ def main():
         "X-Requested-With": "XMLHttpRequest"
     }
 
-    # ── 读取历史数据 ────────────────────────────────────────────────
+    # ── Read historical data ────────────────────────────────────────────────
     hist_filename = 'stoxx_europe_600_historical_components.csv'
 
     if os.path.exists(hist_filename):
@@ -102,13 +147,16 @@ def main():
     else:
         hist_df = pd.DataFrame(columns=['date', 'tickers'])
 
-    # ── 抓取当前成分股 ──────────────────────────────────────────────
+    # ── Fetch current constituents from Wikipedia ────────────────────────────
     url = 'https://en.wikipedia.org/wiki/STOXX_Europe_600'
     r = requests.get(url, headers=header)
     html_stream = io.StringIO(r.text)
+
     tables = pd.read_html(html_stream, header=0)
 
-    # Index components 表通常最大（~600 行），且包含 ticker 和 country 列
+    # The "Index components" table is large (~600 rows). It is typically the
+    # last (largest) table on the page, with columns: Company, Ticker, ISIN,
+    # Country, GICS Sector / Industry.
     constituents = None
     for tbl in sorted(tables, key=lambda t: len(t), reverse=True):
         cols_lower = [str(c).lower().strip() for c in tbl.columns]
@@ -117,15 +165,15 @@ def main():
             break
 
     if constituents is None:
-        raise RuntimeError("Could not locate the Index components table.")
+        raise RuntimeError("Could not locate the Index components table on the page.")
 
-    # 统一列名：小写 + 去除 [1] 脚注
+    # Normalize column names (lowercase + strip footnote brackets like [1])
     constituents.columns = [
         re.sub(r'\[.*\]', '', str(c)).strip().lower()
         for c in constituents.columns
     ]
 
-    # 映射关键列名
+    # Standardise column names (Wikipedia sometimes uses 'ticker symbol' etc.)
     col_map = {}
     for c in constituents.columns:
         if 'ticker' in c:
@@ -136,34 +184,36 @@ def main():
             col_map[c] = 'company'
     constituents = constituents.rename(columns=col_map)
 
-    # ★ 核心逻辑：根据国家给 ticker 添加后缀
+    # ── Add exchange suffix to each ticker based on country ──────────────────
     constituents['ticker'] = constituents.apply(
         lambda row: add_ticker_suffix(row.get('ticker'), row.get('country')),
         axis=1
     )
 
-    # ── 保存当前成分股快照 ──────────────────────────────────────────
+    # ── Save a snapshot of the current components ────────────────────────────
     constituents['date'] = date.today()
     constituents.to_csv('stoxx_europe_600_constituents.csv', index=False)
 
-    # ── 仅保留 ticker + date 用于历史追踪 ───────────────────────────
+    # ── Keep only ticker + date for the historical tracking file ─────────────
     df_tickers = constituents[['ticker', 'date']].copy()
     df_tickers.sort_values(by='ticker', ascending=True, inplace=True)
 
     df = create_constituents(df_tickers)
     df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
+
     final = pd.concat([hist_df, df], ignore_index=True)
     final = final.drop_duplicates(subset=['date', 'tickers'], keep='last')
     final.to_csv(hist_filename, index=False)
 
-    # ── 计算新增/移除 ───────────────────────────────────────────────
+    # ── Compute additions / removals ─────────────────────────────────────────
     historical = pd.read_csv(hist_filename, index_col='date')
     historical['tickers'] = historical['tickers'].apply(lambda x: sorted(x.split(',')))
     historical = historical.sort_index()
+
     combined = diff_tickers(historical)
     combined.to_csv('stoxx_europe_600_changes.csv')
 
-    # ── 更新 README ─────────────────────────────────────────────────
+    # ── Rewrite README ───────────────────────────────────────────────────────
     if not combined.empty:
         changes_readme = combined.iloc[-50:].sort_index(ascending=False)
         markdown_table = changes_readme.to_markdown()
