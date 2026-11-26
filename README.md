@@ -8,6 +8,6 @@ List of STOXX Europe 600 historical constituents from 2026/11/05 to present. CSV
 **'sxxp_historical_components.csv'**  contains historical STOXX Europe 600 index membership from 2026 til present. Output from **'sxxp.py'**
 
 ## Latest Changes
-STOXX Europe 600 Constituents Auto Renew at **2026-11-26 07:38:14**
+STOXX Europe 600 Constituents Auto Renew at **2026-11-26 21:11:37**
 
 No historical variations recorded yet.
